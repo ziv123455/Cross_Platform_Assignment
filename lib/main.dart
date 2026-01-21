@@ -6,16 +6,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+
+import 'analytics_service.dart';
 import 'saved_parks_provider.dart';
 import 'notification_service.dart';
 
 /// Turn this ON only when you want an accessibility screenshot.
-/// After screenshot, set it back to false.
 const bool kShowSemanticsDebugger = false;
 
 /// TEMP for DevTools evidence:
-/// - set true for "BEFORE" screenshot (intentionally slower)
-/// - set false for "AFTER" screenshot (your optimised version)
+/// - true for "BEFORE" screenshot (intentionally slower)
+/// - false for "AFTER" screenshot (optimised)
 const bool kDevtoolsSlowMode = false;
 
 Future<void> main() async {
@@ -24,7 +27,16 @@ Future<void> main() async {
   await Hive.initFlutter();
   await Hive.openBox('saved_parks');
 
-  // Safe on Windows because NotificationService is a no-op there.
+  // Firebase init (safe-wrapped so Windows doesn't break if anything is off)
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (_) {}
+
+  await AnalyticsService.instance.init();
+
+  // Notifications only on Android/iOS
   if (Platform.isAndroid || Platform.isIOS) {
     await NotificationService.instance.init();
   }
@@ -61,9 +73,13 @@ class NearbyParksScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final savedCount = ref.watch(savedParksProvider).length;
-    final title = const Text('ParkPal');
 
-    void openSaved() {
+    Future<void> openSaved() async {
+      await AnalyticsService.instance.logEvent(
+        'open_saved_parks',
+        parameters: {'saved_count': savedCount},
+      );
+
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const SavedParksScreen()),
       );
@@ -74,7 +90,7 @@ class NearbyParksScreen extends ConsumerWidget {
     if (isCupertino) {
       return CupertinoPageScaffold(
         navigationBar: CupertinoNavigationBar(
-          middle: title,
+          middle: const Text('ParkPal'),
           trailing: Semantics(
             label: openSavedLabel,
             button: true,
@@ -98,7 +114,7 @@ class NearbyParksScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: title,
+        title: const Text('ParkPal'),
         actions: [
           Semantics(
             label: openSavedLabel,
@@ -132,11 +148,9 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
   String? _error;
   bool _loading = false;
 
-  // Search
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
-  // Optimised path: cached distances + cached sorted list
   Map<String, double> _distanceCacheKm = {};
   List<Park> _sortedParks = [];
 
@@ -190,6 +204,8 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
       _error = null;
     });
 
+    await AnalyticsService.instance.logEvent('use_my_location_tapped');
+
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
@@ -204,9 +220,7 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
         throw Exception("Location permission denied.");
       }
       if (permission == LocationPermission.deniedForever) {
-        throw Exception(
-          "Location permission permanently denied. Enable it in settings.",
-        );
+        throw Exception("Location permission permanently denied. Enable it in settings.");
       }
 
       final pos = await Geolocator.getCurrentPosition(
@@ -217,14 +231,25 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
         _pos = pos;
         _recomputeDistancesAndSort();
       });
+
+      await AnalyticsService.instance.logEvent('location_obtained');
     } catch (e) {
       setState(() => _error = e.toString());
+      await AnalyticsService.instance.logEvent(
+        'location_error',
+        parameters: {'message': e.toString()},
+      );
     } finally {
       setState(() => _loading = false);
     }
   }
 
-  void _openDetails(BuildContext context, Park p) {
+  Future<void> _openDetails(BuildContext context, Park p) async {
+    await AnalyticsService.instance.logEvent(
+      'view_park_details',
+      parameters: {'park_id': p.id, 'park_name': p.name},
+    );
+
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ParkDetailsScreen(park: p, userPos: _pos)),
     );
@@ -245,9 +270,7 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
   Widget build(BuildContext context) {
     final notificationsSupported = NotificationService.instance.supported;
 
-    // STEP 2 (full): baseList logic with optional slow mode
     final baseList = (() {
-      // "BEFORE" mode: recompute distances + sort on every build (slow on purpose for evidence)
       if (kDevtoolsSlowMode && _pos != null) {
         final temp = [..._parks]
           ..sort((a, b) {
@@ -269,8 +292,6 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
           });
         return temp;
       }
-
-      // "AFTER" mode: use cached sorted list
       return (_pos == null) ? _parks : _sortedParks;
     })();
 
@@ -320,9 +341,7 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
-            onPressed: notificationsSupported
-                ? () => NotificationService.instance.cancelAll()
-                : null,
+            onPressed: notificationsSupported ? () => NotificationService.instance.cancelAll() : null,
             child: const Text("Cancel notifications"),
           ),
         ),
@@ -352,27 +371,18 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
         ),
         const SizedBox(height: 8),
 
-        if (filtered.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(child: Text("No parks match your search.")),
-          ),
-
         for (final p in filtered)
           Consumer(
             builder: (context, ref, _) {
               final saved = ref.watch(savedParksProvider).containsKey(p.id);
 
-              // For "before" evidence, compute distance every build too (extra load).
               final distanceText = _pos == null
                   ? "Tap 'Use my location' to calculate distance"
                   : (kDevtoolsSlowMode
                       ? "${_distanceKmSlow(p).toStringAsFixed(2)} km away"
                       : "${(_distanceCacheKm[p.id] ?? 0).toStringAsFixed(2)} km away");
 
-              final saveLabel = saved
-                  ? "Remove ${p.name} from saved parks"
-                  : "Save ${p.name}";
+              final saveLabel = saved ? "Remove ${p.name} from saved parks" : "Save ${p.name}";
 
               return Card(
                 child: ListTile(
@@ -384,8 +394,20 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
                     child: IconButton(
                       tooltip: saved ? "Unsave" : "Save",
                       icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
-                      onPressed: () =>
-                          ref.read(savedParksProvider.notifier).toggleSave(p),
+                      onPressed: () async {
+                        final willSave = !saved;
+
+                        ref.read(savedParksProvider.notifier).toggleSave(p);
+
+                        await AnalyticsService.instance.logEvent(
+                          'toggle_save_park',
+                          parameters: {
+                            'park_id': p.id,
+                            'park_name': p.name,
+                            'saved': willSave,
+                          },
+                        );
+                      },
                     ),
                   ),
                   onTap: () => _openDetails(context, p),
@@ -413,8 +435,7 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    final existing =
-        ref.read(savedParksProvider.notifier).getSaved(widget.park.id);
+    final existing = ref.read(savedParksProvider.notifier).getSaved(widget.park.id);
     _noteController = TextEditingController(text: existing?.note ?? '');
   }
 
@@ -429,17 +450,6 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
     final savedMap = ref.watch(savedParksProvider);
     final isSaved = savedMap.containsKey(widget.park.id);
 
-    double? km;
-    if (widget.userPos != null) {
-      final meters = Geolocator.distanceBetween(
-        widget.userPos!.latitude,
-        widget.userPos!.longitude,
-        widget.park.lat,
-        widget.park.lng,
-      );
-      km = meters / 1000.0;
-    }
-
     return Scaffold(
       appBar: AppBar(title: Text(widget.park.name)),
       body: Padding(
@@ -453,13 +463,8 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
               children: [
                 Text(
                   widget.park.name,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 8),
-                if (km != null) Text("${km.toStringAsFixed(2)} km away"),
                 const SizedBox(height: 8),
                 Text("Coordinates: ${widget.park.lat}, ${widget.park.lng}"),
                 const SizedBox(height: 16),
@@ -467,32 +472,38 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
                   controller: _noteController,
                   decoration: const InputDecoration(
                     labelText: "Notes",
-                    hintText: "e.g., Nice quiet spot, good shade…",
                     border: OutlineInputBorder(),
                   ),
                   minLines: 2,
                   maxLines: 4,
                   onChanged: (v) {
                     if (isSaved) {
-                      ref
-                          .read(savedParksProvider.notifier)
-                          .updateNote(widget.park.id, v);
+                      ref.read(savedParksProvider.notifier).updateNote(widget.park.id, v);
                     }
                   },
                 ),
                 const SizedBox(height: 16),
                 FilledButton.icon(
                   onPressed: () async {
+                    final willSave = !isSaved;
+
                     await ref.read(savedParksProvider.notifier).toggleSave(
                           widget.park,
                           noteIfSaving: _noteController.text.trim(),
                         );
 
+                    await AnalyticsService.instance.logEvent(
+                      'toggle_save_from_details',
+                      parameters: {
+                        'park_id': widget.park.id,
+                        'park_name': widget.park.name,
+                        'saved': willSave,
+                      },
+                    );
+
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(isSaved ? "Removed from saved" : "Saved park"),
-                      ),
+                      SnackBar(content: Text(isSaved ? "Removed from saved" : "Saved park")),
                     );
                   },
                   icon: Icon(isSaved ? Icons.bookmark_remove : Icons.bookmark_add),
@@ -528,18 +539,19 @@ class SavedParksScreen extends ConsumerWidget {
                   child: ListTile(
                     title: Text(sp.name),
                     subtitle: Text(sp.note.isEmpty ? "No notes" : sp.note),
-                    trailing: Semantics(
-                      label: "Remove ${sp.name} from saved parks",
-                      button: true,
-                      child: IconButton(
-                        tooltip: "Remove",
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () {
-                          ref.read(savedParksProvider.notifier).toggleSave(
-                                Park(name: sp.name, lat: sp.lat, lng: sp.lng),
-                              );
-                        },
-                      ),
+                    trailing: IconButton(
+                      tooltip: "Remove",
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () async {
+                        ref.read(savedParksProvider.notifier).toggleSave(
+                              Park(name: sp.name, lat: sp.lat, lng: sp.lng),
+                            );
+
+                        await AnalyticsService.instance.logEvent(
+                          'remove_saved_park',
+                          parameters: {'park_id': sp.id, 'park_name': sp.name},
+                        );
+                      },
                     ),
                   ),
                 );
