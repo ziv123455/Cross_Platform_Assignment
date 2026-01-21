@@ -9,13 +9,18 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'saved_parks_provider.dart';
 import 'notification_service.dart';
 
+/// Turn this ON only when you want to take an accessibility screenshot.
+/// It will draw boxes/labels over your UI.
+/// After screenshot, set it back to false.
+const bool kShowSemanticsDebugger = false;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Hive.initFlutter();
   await Hive.openBox('saved_parks');
 
-  // Safe on Windows because NotificationService is a no-op there.
+  // Safe on Windows because your NotificationService is a no-op there.
   if (Platform.isAndroid || Platform.isIOS) {
     await NotificationService.instance.init();
   }
@@ -31,12 +36,14 @@ class AppRoot extends StatelessWidget {
     if (Platform.isIOS) {
       return const CupertinoApp(
         debugShowCheckedModeBanner: false,
+        showSemanticsDebugger: kShowSemanticsDebugger,
         home: NearbyParksScreen(isCupertino: true),
       );
     }
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      showSemanticsDebugger: kShowSemanticsDebugger,
       theme: ThemeData(useMaterial3: true),
       home: const NearbyParksScreen(isCupertino: false),
     );
@@ -58,20 +65,26 @@ class NearbyParksScreen extends ConsumerWidget {
       );
     }
 
+    final openSavedLabel = "Open saved parks. $savedCount saved.";
+
     if (isCupertino) {
       return CupertinoPageScaffold(
         navigationBar: CupertinoNavigationBar(
           middle: title,
-          trailing: CupertinoButton(
-            padding: EdgeInsets.zero,
-            onPressed: openSaved,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(CupertinoIcons.heart),
-                const SizedBox(width: 6),
-                Text('$savedCount'),
-              ],
+          trailing: Semantics(
+            label: openSavedLabel,
+            button: true,
+            child: CupertinoButton(
+              padding: EdgeInsets.zero,
+              onPressed: openSaved,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(CupertinoIcons.heart),
+                  const SizedBox(width: 6),
+                  Text('$savedCount'),
+                ],
+              ),
             ),
           ),
         ),
@@ -83,11 +96,16 @@ class NearbyParksScreen extends ConsumerWidget {
       appBar: AppBar(
         title: title,
         actions: [
-          IconButton(
-            onPressed: openSaved,
-            icon: Badge(
-              label: Text('$savedCount'),
-              child: const Icon(Icons.favorite),
+          Semantics(
+            label: openSavedLabel,
+            button: true,
+            child: IconButton(
+              tooltip: "Saved parks ($savedCount)",
+              onPressed: openSaved,
+              icon: Badge(
+                label: Text('$savedCount'),
+                child: const Icon(Icons.favorite),
+              ),
             ),
           ),
         ],
@@ -110,10 +128,11 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
   String? _error;
   bool _loading = false;
 
-  // Performance + UX: search + cached distances + cached sorted list
+  // Search
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
+  // Performance: cached distances + cached sorted list
   Map<String, double> _distanceCacheKm = {};
   List<Park> _sortedParks = [];
 
@@ -181,7 +200,9 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
         throw Exception("Location permission denied.");
       }
       if (permission == LocationPermission.deniedForever) {
-        throw Exception("Location permission permanently denied. Enable it in settings.");
+        throw Exception(
+          "Location permission permanently denied. Enable it in settings.",
+        );
       }
 
       final pos = await Geolocator.getCurrentPosition(
@@ -221,29 +242,23 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
         TextField(
           controller: _searchController,
           onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
-          decoration: InputDecoration(
-            prefixIcon: const Icon(Icons.search),
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search),
             labelText: "Search parks",
             hintText: "e.g., Barrakka",
-            border: const OutlineInputBorder(),
-            suffixIcon: _loading
-                ? const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                    ),
-                  )
-                : null,
+            border: OutlineInputBorder(),
           ),
         ),
         const SizedBox(height: 12),
 
-        ElevatedButton.icon(
-          onPressed: _loading ? null : _getLocation,
-          icon: const Icon(Icons.my_location),
-          label: Text(_loading ? "Getting location..." : "Use my location"),
+        Semantics(
+          label: "Use my location",
+          button: true,
+          child: ElevatedButton.icon(
+            onPressed: _loading ? null : _getLocation,
+            icon: const Icon(Icons.my_location),
+            label: Text(_loading ? "Getting location..." : "Use my location"),
+          ),
         ),
 
         const SizedBox(height: 10),
@@ -310,14 +325,22 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
                   ? "Tap 'Use my location' to calculate distance"
                   : "${(_distanceCacheKm[p.id] ?? 0).toStringAsFixed(2)} km away";
 
+              final saveLabel = saved
+                  ? "Remove ${p.name} from saved parks"
+                  : "Save ${p.name}";
+
               return Card(
                 child: ListTile(
                   title: Text(p.name),
                   subtitle: Text(distanceText),
-                  trailing: IconButton(
-                    tooltip: saved ? "Unsave" : "Save",
-                    icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
-                    onPressed: () => ref.read(savedParksProvider.notifier).toggleSave(p),
+                  trailing: Semantics(
+                    label: saveLabel,
+                    button: true,
+                    child: IconButton(
+                      tooltip: saved ? "Unsave" : "Save",
+                      icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
+                      onPressed: () => ref.read(savedParksProvider.notifier).toggleSave(p),
+                    ),
                   ),
                   onTap: () => _openDetails(context, p),
                 ),
@@ -454,13 +477,18 @@ class SavedParksScreen extends ConsumerWidget {
                   child: ListTile(
                     title: Text(sp.name),
                     subtitle: Text(sp.note.isEmpty ? "No notes" : sp.note),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () {
-                        ref.read(savedParksProvider.notifier).toggleSave(
-                              Park(name: sp.name, lat: sp.lat, lng: sp.lng),
-                            );
-                      },
+                    trailing: Semantics(
+                      label: "Remove ${sp.name} from saved parks",
+                      button: true,
+                      child: IconButton(
+                        tooltip: "Remove",
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () {
+                          ref.read(savedParksProvider.notifier).toggleSave(
+                                Park(name: sp.name, lat: sp.lat, lng: sp.lng),
+                              );
+                        },
+                      ),
                     ),
                   ),
                 );
