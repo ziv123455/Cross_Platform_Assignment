@@ -1,0 +1,37 @@
+name: Flutter CI
+
+# Runs automatically on pushes to main and on pull requests into main.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Checkout your repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2) Install Flutter (stable) + cache dependencies for faster builds
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # 3) Download dependencies
+      - name: Install dependencies
+        run: flutter pub get
+
+      # 4) Static analysis (lint + analysis)
+      - name: Analyze
+        run: flutter analyze
+
+      # 5) Run automated tests
+      - name: Test
+        run: flutter test
