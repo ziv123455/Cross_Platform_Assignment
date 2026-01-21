@@ -9,10 +9,14 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'saved_parks_provider.dart';
 import 'notification_service.dart';
 
-/// Turn this ON only when you want to take an accessibility screenshot.
-/// It will draw boxes/labels over your UI.
+/// Turn this ON only when you want an accessibility screenshot.
 /// After screenshot, set it back to false.
 const bool kShowSemanticsDebugger = false;
+
+/// TEMP for DevTools evidence:
+/// - set true for "BEFORE" screenshot (intentionally slower)
+/// - set false for "AFTER" screenshot (your optimised version)
+const bool kDevtoolsSlowMode = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,7 +24,7 @@ Future<void> main() async {
   await Hive.initFlutter();
   await Hive.openBox('saved_parks');
 
-  // Safe on Windows because your NotificationService is a no-op there.
+  // Safe on Windows because NotificationService is a no-op there.
   if (Platform.isAndroid || Platform.isIOS) {
     await NotificationService.instance.init();
   }
@@ -132,7 +136,7 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
 
-  // Performance: cached distances + cached sorted list
+  // Optimised path: cached distances + cached sorted list
   Map<String, double> _distanceCacheKm = {};
   List<Park> _sortedParks = [];
 
@@ -226,11 +230,49 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
     );
   }
 
+  double _distanceKmSlow(Park p) {
+    if (_pos == null) return double.infinity;
+    final meters = Geolocator.distanceBetween(
+      _pos!.latitude,
+      _pos!.longitude,
+      p.lat,
+      p.lng,
+    );
+    return meters / 1000.0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final notificationsSupported = NotificationService.instance.supported;
 
-    final baseList = (_pos == null) ? _parks : _sortedParks;
+    // STEP 2 (full): baseList logic with optional slow mode
+    final baseList = (() {
+      // "BEFORE" mode: recompute distances + sort on every build (slow on purpose for evidence)
+      if (kDevtoolsSlowMode && _pos != null) {
+        final temp = [..._parks]
+          ..sort((a, b) {
+            final da = Geolocator.distanceBetween(
+                  _pos!.latitude,
+                  _pos!.longitude,
+                  a.lat,
+                  a.lng,
+                ) /
+                1000.0;
+            final db = Geolocator.distanceBetween(
+                  _pos!.latitude,
+                  _pos!.longitude,
+                  b.lat,
+                  b.lng,
+                ) /
+                1000.0;
+            return da.compareTo(db);
+          });
+        return temp;
+      }
+
+      // "AFTER" mode: use cached sorted list
+      return (_pos == null) ? _parks : _sortedParks;
+    })();
 
     final filtered = _query.isEmpty
         ? baseList
@@ -321,9 +363,12 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
             builder: (context, ref, _) {
               final saved = ref.watch(savedParksProvider).containsKey(p.id);
 
+              // For "before" evidence, compute distance every build too (extra load).
               final distanceText = _pos == null
                   ? "Tap 'Use my location' to calculate distance"
-                  : "${(_distanceCacheKm[p.id] ?? 0).toStringAsFixed(2)} km away";
+                  : (kDevtoolsSlowMode
+                      ? "${_distanceKmSlow(p).toStringAsFixed(2)} km away"
+                      : "${(_distanceCacheKm[p.id] ?? 0).toStringAsFixed(2)} km away");
 
               final saveLabel = saved
                   ? "Remove ${p.name} from saved parks"
@@ -339,7 +384,8 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
                     child: IconButton(
                       tooltip: saved ? "Unsave" : "Save",
                       icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
-                      onPressed: () => ref.read(savedParksProvider.notifier).toggleSave(p),
+                      onPressed: () =>
+                          ref.read(savedParksProvider.notifier).toggleSave(p),
                     ),
                   ),
                   onTap: () => _openDetails(context, p),
@@ -367,7 +413,8 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    final existing = ref.read(savedParksProvider.notifier).getSaved(widget.park.id);
+    final existing =
+        ref.read(savedParksProvider.notifier).getSaved(widget.park.id);
     _noteController = TextEditingController(text: existing?.note ?? '');
   }
 
@@ -406,14 +453,16 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
               children: [
                 Text(
                   widget.park.name,
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 if (km != null) Text("${km.toStringAsFixed(2)} km away"),
                 const SizedBox(height: 8),
                 Text("Coordinates: ${widget.park.lat}, ${widget.park.lng}"),
                 const SizedBox(height: 16),
-
                 TextField(
                   controller: _noteController,
                   decoration: const InputDecoration(
@@ -425,13 +474,13 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
                   maxLines: 4,
                   onChanged: (v) {
                     if (isSaved) {
-                      ref.read(savedParksProvider.notifier).updateNote(widget.park.id, v);
+                      ref
+                          .read(savedParksProvider.notifier)
+                          .updateNote(widget.park.id, v);
                     }
                   },
                 ),
-
                 const SizedBox(height: 16),
-
                 FilledButton.icon(
                   onPressed: () async {
                     await ref.read(savedParksProvider.notifier).toggleSave(
@@ -441,7 +490,9 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
 
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(isSaved ? "Removed from saved" : "Saved park")),
+                      SnackBar(
+                        content: Text(isSaved ? "Removed from saved" : "Saved park"),
+                      ),
                     );
                   },
                   icon: Icon(isSaved ? Icons.bookmark_remove : Icons.bookmark_add),
