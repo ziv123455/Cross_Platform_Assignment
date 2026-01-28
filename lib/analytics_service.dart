@@ -6,8 +6,7 @@ class AnalyticsService {
   AnalyticsService._();
   static final AnalyticsService instance = AnalyticsService._();
 
-  // Firebase Analytics supports Android/iOS/Web/macOS.
-  // We'll no-op on Windows so your desktop build stays fine.
+  // Analytics supports Android/iOS/Web/macOS. We'll no-op on Windows/Linux.
   static bool get supported =>
       kIsWeb || Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
 
@@ -22,10 +21,24 @@ class AnalyticsService {
     }
   }
 
-  Future<void> logEvent(String name, {Map<String, Object?>? parameters}) async {
+  /// Accept nullable values, but FirebaseAnalytics requires non-null values.
+  Future<void> logEvent(
+    String name, {
+    Map<String, Object?>? parameters,
+  }) async {
     if (!supported || _analytics == null) return;
+
+    // Convert Map<String, Object?> -> Map<String, Object> by dropping nulls
+    Map<String, Object>? cleaned;
+    if (parameters != null) {
+      cleaned = <String, Object>{};
+      parameters.forEach((key, value) {
+        if (value != null) cleaned![key] = value;
+      });
+    }
+
     try {
-      await _analytics!.logEvent(name: name, parameters: parameters);
+      await _analytics!.logEvent(name: name, parameters: cleaned);
     } catch (_) {
       // ignore
     }
