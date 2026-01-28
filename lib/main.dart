@@ -36,6 +36,9 @@ Future<void> main() async {
 
   await AnalyticsService.instance.init();
 
+  // Guaranteed analytics event for DebugView evidence
+  await AnalyticsService.instance.logEvent('app_open');
+
   // Notifications only on Android/iOS
   if (Platform.isAndroid || Platform.isIOS) {
     await NotificationService.instance.init();
@@ -220,7 +223,8 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
         throw Exception("Location permission denied.");
       }
       if (permission == LocationPermission.deniedForever) {
-        throw Exception("Location permission permanently denied. Enable it in settings.");
+        throw Exception(
+            "Location permission permanently denied. Enable it in settings.");
       }
 
       final pos = await Geolocator.getCurrentPosition(
@@ -251,7 +255,9 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
     );
 
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ParkDetailsScreen(park: p, userPos: _pos)),
+      MaterialPageRoute(
+        builder: (_) => ParkDetailsScreen(park: p, userPos: _pos),
+      ),
     );
   }
 
@@ -313,7 +319,6 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
           ),
         ),
         const SizedBox(height: 12),
-
         Semantics(
           label: "Use my location",
           button: true,
@@ -323,9 +328,7 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
             label: Text(_loading ? "Getting location..." : "Use my location"),
           ),
         ),
-
         const SizedBox(height: 10),
-
         OutlinedButton.icon(
           onPressed: notificationsSupported
               ? () => NotificationService.instance.showTestIn5Seconds()
@@ -337,17 +340,16 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
                 : "Notifications: run on Android/iOS",
           ),
         ),
-
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
-            onPressed: notificationsSupported ? () => NotificationService.instance.cancelAll() : null,
+            onPressed: notificationsSupported
+                ? () => NotificationService.instance.cancelAll()
+                : null,
             child: const Text("Cancel notifications"),
           ),
         ),
-
         const SizedBox(height: 12),
-
         if (_pos != null)
           Card(
             child: ListTile(
@@ -357,20 +359,17 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
               ),
             ),
           ),
-
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(_error!, style: const TextStyle(color: Colors.red)),
           ),
-
         const SizedBox(height: 16),
         const Text(
           "Nearby parks",
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-
         for (final p in filtered)
           Consumer(
             builder: (context, ref, _) {
@@ -382,7 +381,8 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
                       ? "${_distanceKmSlow(p).toStringAsFixed(2)} km away"
                       : "${(_distanceCacheKm[p.id] ?? 0).toStringAsFixed(2)} km away");
 
-              final saveLabel = saved ? "Remove ${p.name} from saved parks" : "Save ${p.name}";
+              final saveLabel =
+                  saved ? "Remove ${p.name} from saved parks" : "Save ${p.name}";
 
               return Card(
                 child: ListTile(
@@ -393,7 +393,9 @@ class _NearbyParksBodyState extends State<NearbyParksBody> {
                     button: true,
                     child: IconButton(
                       tooltip: saved ? "Unsave" : "Save",
-                      icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
+                      icon: Icon(saved
+                          ? Icons.bookmark
+                          : Icons.bookmark_add_outlined),
                       onPressed: () async {
                         final willSave = !saved;
 
@@ -435,7 +437,8 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    final existing = ref.read(savedParksProvider.notifier).getSaved(widget.park.id);
+    final existing =
+        ref.read(savedParksProvider.notifier).getSaved(widget.park.id);
     _noteController = TextEditingController(text: existing?.note ?? '');
   }
 
@@ -463,7 +466,8 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
               children: [
                 Text(
                   widget.park.name,
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
                 Text("Coordinates: ${widget.park.lat}, ${widget.park.lng}"),
@@ -478,7 +482,9 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
                   maxLines: 4,
                   onChanged: (v) {
                     if (isSaved) {
-                      ref.read(savedParksProvider.notifier).updateNote(widget.park.id, v);
+                      ref
+                          .read(savedParksProvider.notifier)
+                          .updateNote(widget.park.id, v);
                     }
                   },
                 ),
@@ -503,10 +509,13 @@ class _ParkDetailsScreenState extends ConsumerState<ParkDetailsScreen> {
 
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(isSaved ? "Removed from saved" : "Saved park")),
+                      SnackBar(
+                          content: Text(
+                              isSaved ? "Removed from saved" : "Saved park")),
                     );
                   },
-                  icon: Icon(isSaved ? Icons.bookmark_remove : Icons.bookmark_add),
+                  icon:
+                      Icon(isSaved ? Icons.bookmark_remove : Icons.bookmark_add),
                   label: Text(isSaved ? "Unsave park" : "Save park"),
                 ),
               ],
